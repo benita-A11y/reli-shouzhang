@@ -287,16 +287,33 @@ async function getBillStats() {
 
 /* ---------- 用户贡献 ---------- */
 async function getContribs() { return dbGetAll(IDB.contribs); }
+/* 本地模拟平台审核：AI 归类成功且品牌已收录 → 已通过；
+ * 创建新品牌或系列归入「其他」→ 审核中；名称不合规（过短/含违禁词）→ 已驳回 */
+function auditContrib(c) {
+  if (!c || !c.name || String(c.name).length < 2 || /测试|广告|垃圾|xxx/.test(String(c.name))) return '已驳回';
+  if (c.series === '其他' || !c.matchBrand) return '审核中';
+  return '已通过';
+}
 async function addContrib(c) {
-  const contrib = Object.assign({ id: uid(), createdAt: nowISO(), status: '待审核' }, c);
+  const contrib = Object.assign({ id: uid(), createdAt: nowISO() }, c);
+  contrib.status = auditContrib(contrib);
   await dbPut(IDB.contribs, contrib);
-  // 众包验证：同品牌同名 ≥3 次提交 → 全部打上「热门新品」标签
+  // 众包验证：同品牌同名 ≥3 次提交 → 全部打上「热门新品」标签并提升为已通过
   const all = (await dbGetAll(IDB.contribs)).filter((x) => x.name === contrib.name && x.brand === contrib.brand);
   if (all.length >= 3) {
-    for (const x of all) { x.hot = true; await dbPut(IDB.contribs, x); }
+    for (const x of all) { x.hot = true; x.status = '已通过'; await dbPut(IDB.contribs, x); }
     contrib.hot = true;
+    contrib.status = '已通过';
   }
   return contrib;
+}
+/* 贡献者激励称号：1次新品体验官 / 5次资深体验官 / 10次首席体验官 */
+function contribBadge(count) {
+  const n = Number(count) || 0;
+  if (n >= 10) return { name: '首席体验官', emoji: '👑' };
+  if (n >= 5) return { name: '资深体验官', emoji: '🎖️' };
+  if (n >= 1) return { name: '新品体验官', emoji: '🪙' };
+  return null;
 }
 
 /* ---------- 精度控制：精细期（前10次）精确数字，日常期区间估算 ---------- */
