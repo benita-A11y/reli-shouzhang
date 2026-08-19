@@ -77,13 +77,18 @@ async function renderNutriRec() {
   const mealKey = NUTRI.meal;
   const isSnack = mealKey.startsWith('snack');
   const mealForRec = isSnack ? 'snack' : mealKey === 'lunch0' ? 'lunch' : 'dinner';
-  // 午餐推荐基于早餐独立数据
+  const recsToday = await getRecordsByDate(todayKey());
+  const sumMacros = (list) => list.reduce((a, r) => {
+    a.kcal += r.kcal; a.carbs += (r.macros && r.macros.carbs) || 0; a.protein += (r.macros && r.macros.protein) || 0; return a;
+  }, { kcal: 0, carbs: 0, protein: 0 });
+  // 午餐/上午加餐基于早餐数据；下午加餐基于午餐数据
   let src = analysis;
-  if (mealForRec === 'lunch') {
-    const bf = (await getRecordsByDate(todayKey())).filter((r) => r.meal === 'breakfast').reduce((a, r) => {
-      a.kcal += r.kcal; a.carbs += (r.macros && r.macros.carbs) || 0; a.protein += (r.macros && r.macros.protein) || 0; return a;
-    }, { kcal: 0, carbs: 0, protein: 0 });
+  if (mealForRec === 'lunch' || mealKey === 'snack0') {
+    const bf = sumMacros(recsToday.filter((r) => r.meal === 'breakfast'));
     src = Object.assign({}, analysis, { stats: bf, carbs: bf.carbs, protein: bf.protein, remaining: analysis.target - bf.kcal });
+  } else if (mealKey === 'snack1') {
+    const lu = sumMacros(recsToday.filter((r) => r.meal === 'lunch'));
+    src = Object.assign({}, analysis, { stats: lu, carbs: lu.carbs, protein: lu.protein });
   }
   const pool = FOODS.map((f) => ({
     name: f.name, kcal: f.kcal, emoji: foodEmoji(f), photo: f.photo, price: f.price,
@@ -94,7 +99,7 @@ async function renderNutriRec() {
     { name: '一小把坚果', kcal: 200, emoji: '🥜', price: 8, flavor: '咸香', macros: { protein: 6, carbs: 7, fat: 18 } },
     { name: '热牛奶', kcal: 150, emoji: '🥛', price: 5, flavor: '清淡', macros: { protein: 8, carbs: 12, fat: 8 } }
   ]);
-  const rec = recommendNextMeal(mealForRec, src, PROFILE.tastePrefs, pool);
+  const rec = recommendNextMeal(mealForRec, src, PROFILE.tastePrefs, pool, mealKey);
   box.innerHTML = `
     ${rec.note ? `<div class="reason-box" style="border-left-color:var(--purple);margin-bottom:12px">${esc(rec.note)}</div>` : ''}
     ${rec.items.length ? rec.items.map((it) => `
@@ -154,6 +159,7 @@ registerAction('nutri:record', async (el) => {
  * ============================================================ */
 registerPage('profile', async function (root) {
   const st = await getBillStats();
+  const badge = contribBadge(PROFILE.contributionCount);
   root.innerHTML = `
     <div class="page-head">
       <div>
@@ -164,6 +170,7 @@ registerPage('profile', async function (root) {
     <div class="card" style="text-align:center;padding:26px 20px">
       <div class="avatar-wrap" style="cursor:pointer" data-action="prof:avatar">${PROFILE.avatar && String(PROFILE.avatar).startsWith('data:') ? `<img src="${PROFILE.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">` : esc(PROFILE.avatar || '🥑')}</div>
       <div style="font-size:19px;font-weight:800">${esc(PROFILE.nickname)}</div>
+      ${badge ? `<div style="margin-top:4px"><span class="cat-tag" style="background:var(--purple-soft);color:var(--purple)">${badge.emoji} ${badge.name}</span></div>` : ''}
       <div class="muted small" style="margin-top:3px">「${esc(PROFILE.motto)}」 <span style="color:var(--brand);cursor:pointer" data-action="prof:motto">编辑</span></div>
       <div class="muted small" style="margin-top:6px">目标 ${PROFILE.targetKcal}kcal/天${PROFILE.bmr ? ` · BMR ${PROFILE.bmr}` : ''}</div>
       <div style="margin-top:12px;display:flex;justify-content:center"><button class="btn sm" data-action="prof:body">📏 身体数据</button></div>
@@ -181,6 +188,8 @@ registerPage('profile', async function (root) {
           <div class="li-sub">提交新品及审核状态</div></div><div class="li-arrow">›</div></div>
       <div class="list-item" data-action="nav:go" data-page="board"><div class="li-icon" style="background:var(--brand-soft)">🗓️</div>
         <div class="li-main"><div class="li-title">我的日历</div><div class="li-sub">跳转到数据看板的日历视图</div></div><div class="li-arrow">›</div></div>
+      <div class="list-item" data-action="day:indulge"><div class="li-icon" style="background:var(--pink-soft)">🎉</div>
+        <div class="li-main"><div class="li-title">标记今天为放纵日</div><div class="li-sub">今天想好好吃一顿？给自己放个假</div></div><div class="li-arrow">›</div></div>
       <div class="list-item" data-action="prof:export"><div class="li-icon" style="background:var(--green-soft)">📤</div>
         <div class="li-main"><div class="li-title">数据导出</div><div class="li-sub">一键导出所有个人数据（JSON/CSV）</div></div><div class="li-arrow">›</div></div>
       <div class="list-item" data-action="prof:settings"><div class="li-icon" style="background:rgba(0,0,0,0.05)">⚙️</div>
@@ -259,15 +268,17 @@ registerAction('prof:body-save', async () => {
 });
 registerAction('prof:contribs', async () => {
   const list = await getContribs();
+  const badge = contribBadge(PROFILE.contributionCount);
+  const statusColor = (s) => (s === '已通过' ? 'var(--green)' : s === '已驳回' ? 'var(--red)' : 'var(--orange)');
   openSheet(`
     <div class="sheet-title">我的贡献</div>
-    <div class="muted small" style="text-align:center;margin-bottom:12px">已贡献 ${PROFILE.contributionCount} 次 · 达 5/10 次解锁荣誉标签</div>
+    <div class="muted small" style="text-align:center;margin-bottom:12px">已贡献 ${PROFILE.contributionCount} 次 · ${badge ? `当前称号：<b>${badge.emoji} ${badge.name}</b>` : '提交 1 次解锁「新品体验官」'}</div>
     ${list.length ? list.map((c) => `
       <div class="order-card">
         <div class="order-emoji" style="background:var(--orange-soft)">🧋</div>
         <div class="order-info"><div class="order-name">${esc(c.name)}${c.hot ? ' <span class="cat-tag" style="background:var(--red-soft);color:var(--red)">🔥热门新品</span>' : ''}</div>
           <div class="order-shop">${esc(c.brand || '')} · ¥${c.price}${c.kcal ? ' · ' + c.kcal + 'kcal' : ''} · ${esc(c.series || '自动归类')}${c.spec ? ' · ' + esc(c.spec) : ''}</div></div>
-        <div class="order-save" style="color:${c.status === '待审核' ? 'var(--orange)' : 'var(--green)'}">${c.status}</div>
+        <div class="order-save" style="color:${statusColor(c.status)}">${c.status}</div>
       </div>`).join('') : `<div class="empty-state"><div class="es-icon">📮</div><div class="es-title">还没有贡献</div><div class="es-sub">在「记录」页没找到想吃的？点我新增，帮大家一起建库</div></div>`}
     <button class="btn block" data-action="contrib:open">＋ 提交新品</button>`);
 });
@@ -281,7 +292,7 @@ registerAction('prof:settings', () => {
         <input type="checkbox" id="notify-switch" ${PROFILE.notifyOn ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--brand)"></div>
       <div class="divider"></div>
       <div><div style="font-weight:700;font-size:14.5px;margin-bottom:10px">放纵日 Emoji 选择</div>
-        <div class="chips">${['🎉', '✨', '🍕', '🍰', '🌮'].map((e) => `<button class="chip ${PROFILE.indulgenceEmoji === e ? 'on' : ''}" data-action="prof:emoji" data-v="${e}">${e}</button>`).join('')}</div></div>
+        <div class="chips">${['🎉', '🍔', '🍕', '🎂', '🎊', '✨'].map((e) => `<button class="chip ${PROFILE.indulgenceEmoji === e ? 'on' : ''}" data-action="prof:emoji" data-v="${e}">${e}</button>`).join('')}</div></div>
     </div>
     <div class="hint" style="text-align:center;margin-top:10px">所有数据存储在本机，飞行模式也能用 ✈️</div>`);
   $('#notify-switch').addEventListener('change', async (e) => {
@@ -368,7 +379,7 @@ registerAction('contrib:submit', async () => {
   const contrib = {
     name, brand, price, kcal, spec, photo: window._contribPhoto || '',
     series: series === '其他' && !matchBrand ? '其他' : series,
-    status: series === '其他' ? '待人工审核' : '待审核'
+    matchBrand: !!matchBrand
   };
   await addContrib(contrib);
   // 同款消歧：品牌内相似度>80% 合并提示
@@ -378,10 +389,11 @@ registerAction('contrib:submit', async () => {
   if (dup) hint += ` · 与「${dup.name}」相似度高，已合并参考`;
   // 众包验证（addContrib 内已处理）：≥3 次提交自动打「热门新品」标签
   PROFILE.contributionCount = (PROFILE.contributionCount || 0) + 1;
-  const badge = [1, 5, 10].includes(PROFILE.contributionCount) ? `🎖️ 贡献${PROFILE.contributionCount}次荣誉标签解锁！` : '';
+  const bd = contribBadge(PROFILE.contributionCount);
+  const badge = bd && [1, 5, 10].includes(PROFILE.contributionCount) ? ` · 解锁「${bd.emoji} ${bd.name}」称号！` : '';
   await saveProfile(PROFILE);
   closeSheet();
-  toast(hint + (badge ? ' ' + badge : ''), 'brand');
+  toast(`${hint}（状态：${contrib.status}）${badge}`, 'brand');
 });
 
 /* ============================================================
