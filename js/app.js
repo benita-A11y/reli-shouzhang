@@ -48,9 +48,10 @@ function photoHTML(f, big) {
 }
 const defaultMeal = () => {
   const h = new Date().getHours();
-  if (h < 10) return 'breakfast';
-  if (h < 14) return 'lunch';
-  if (h < 20) return 'dinner';
+  // 时段规范：早餐5-10点 · 午餐11-14点 · 晚餐17-20点 · 其他为加餐
+  if (h >= 5 && h < 10) return 'breakfast';
+  if (h >= 11 && h < 14) return 'lunch';
+  if (h >= 17 && h < 20) return 'dinner';
   return 'snack';
 };
 
