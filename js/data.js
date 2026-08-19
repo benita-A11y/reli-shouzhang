@@ -8,11 +8,11 @@
 /* ---------- 规格库 ---------- */
 const DRINK_SPECS = {
   sweetness: [
-    { label: '无糖', deltaKcal: -50, deltaPrice: 0 },
-    { label: '3分糖', deltaKcal: -25, deltaPrice: 0 },
+    { label: '无糖', deltaKcal: -36, deltaPrice: 0 },
+    { label: '3分糖', deltaKcal: -18, deltaPrice: 0 },
     { label: '5分糖', deltaKcal: 0, deltaPrice: 0 },
-    { label: '7分糖', deltaKcal: 20, deltaPrice: 0 },
-    { label: '全糖', deltaKcal: 45, deltaPrice: 0 }
+    { label: '7分糖', deltaKcal: 18, deltaPrice: 0 },
+    { label: '全糖', deltaKcal: 36, deltaPrice: 0 }
   ],
   temperature: [
     { label: '冰', coef: 1, note: '' },
