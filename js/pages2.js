@@ -214,7 +214,7 @@ registerPage('bill', async function (root) {
         <div class="order-info"><div class="order-name">${esc(o.itemName)}</div>
           <div class="order-shop">${esc(o.shopName || '')}${o.specs ? ' · ' + esc(o.specs) : ''}</div>
           <div class="order-date">${o.date}</div></div>
-        <div class="order-save">-${o.savedKcal}kcal<br>-¥${o.savedPrice.toFixed(2)}</div>
+        <div class="order-save">-${o.savedKcal}kcal<br>${o.priceSource === 'none' ? '未定价' : '-¥' + o.savedPrice.toFixed(2)}</div>
       </div>`).join('') : `
       <div class="empty-state" style="padding:34px 20px">
         <div class="es-icon">🧾</div>
@@ -307,12 +307,21 @@ registerAction('spec:topping', (el) => {
   else BILL.toppings.push(v);
   renderSpecSheet();
 });
+async function getRealPrice(item, shop) {
+  // 省下金额 = 现实价格：用户食谱价 > 平台预置价 > 未定价
+  try { await loadFoods(); } catch (e) { /* 未初始化时忽略 */ }
+  const mine = FOODS.find((f) => f.name === item.name && (!shop || !f.shop || f.shop === shop.name));
+  if (mine && mine.price > 0) return { price: mine.price, source: 'user' };
+  if (item.price > 0) return { price: item.price, source: 'platform' };
+  return { price: 0, source: 'none' };
+}
 registerAction('spec:confirm', async () => {
   const total = computeBill();
+  const real = await getRealPrice(BILL.item, BILL.shop);
   const order = {
     itemName: BILL.item.name, shopName: BILL.shop.name, shopEmoji: BILL.shop.emoji,
     specs: total.specs, totalKcal: total.kcal, totalPrice: total.price,
-    savedKcal: total.kcal, savedPrice: total.price, date: todayKey()
+    savedKcal: total.kcal, savedPrice: real.price, priceSource: real.source, date: todayKey()
   };
   await addOrder(order);
   await upsertShopFood(BILL.item.name, total.kcal, total.price, BILL.shop.name, BILL.shop.id);
@@ -325,7 +334,7 @@ function renderBillResult(order) {
     <div style="text-align:center;padding-top:16px">
       <div class="result-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
       <div class="result-big">- ${order.savedKcal} kcal</div>
-      <div class="result-big sub">- ¥${order.savedPrice.toFixed(2)}</div>
+      <div class="result-big sub">${order.priceSource === 'none' ? '¥0.00（未定价）' : '- ¥' + order.savedPrice.toFixed(2)}</div>
       <div class="result-note">${esc(order.shopName)} · ${esc(order.itemName)}<br>相当于慢跑 ${hours} 小时才能消耗掉哦，你成功躲过一劫！</div>
       <div class="flex" style="justify-content:center;gap:10px">
         <button class="btn ghost" data-action="bill:again">再来一单</button>
