@@ -370,14 +370,19 @@ registerAction('form:save', async (el) => {
  * ============================================================ */
 let RECIPES_FILTER = '全部';
 let RECIPES_Q = '';
+let RECIPES_SORT = 'recent';
 registerPage('recipes', async function (root) {
   await loadFoods();
   const filter = RECIPES_FILTER;
   const q = RECIPES_Q;
+  const sort = RECIPES_SORT;
   let list = FOODS.slice();
   if (filter !== '全部') list = list.filter((f) => f.category === filter);
   if (q) list = list.filter((f) => f.name.toLowerCase().includes(q.toLowerCase()));
-  list.sort((a, b) => ((b.lastEatenAt || b.updatedAt) || '').localeCompare((a.lastEatenAt || a.updatedAt) || ''));
+  if (sort === 'kcal-asc') list.sort((a, b) => (a.kcal || 0) - (b.kcal || 0));
+  else if (sort === 'kcal-desc') list.sort((a, b) => (b.kcal || 0) - (a.kcal || 0));
+  else if (sort === 'name') list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh'));
+  else list.sort((a, b) => ((b.lastEatenAt || b.updatedAt) || '').localeCompare((a.lastEatenAt || a.updatedAt) || ''));
 
   root.innerHTML = `
     <div class="page-head">
@@ -391,8 +396,11 @@ registerPage('recipes', async function (root) {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input id="recipes-search" placeholder="搜索食物…" value="${esc(q)}" autocomplete="off">
     </div>
-    <div class="chips" id="recipes-chips" style="margin-bottom:16px">
+    <div class="chips" id="recipes-chips" style="margin-bottom:10px">
       ${['全部', '外卖', '食堂', '自制', '饮品'].map((c) => `<button class="chip ${filter === c ? 'on' : ''}" data-action="recipes:cat" data-v="${c}">${c}</button>`).join('')}
+    </div>
+    <div class="chips" id="recipes-sort" style="margin-bottom:16px;opacity:.85">
+      ${[['recent', '⏱️ 最近食用'], ['kcal-asc', '热量低→高'], ['kcal-desc', '热量高→低'], ['name', '🔤 名称']].map(([v, t]) => `<button class="chip sm ${sort === v ? 'on' : ''}" data-action="recipes:sort" data-v="${v}">${t}</button>`).join('')}
     </div>
     ${list.length ? `<div class="food-grid">
       ${list.map((f) => {
@@ -434,6 +442,10 @@ registerPage('recipes', async function (root) {
 });
 registerAction('recipes:cat', (el) => {
   RECIPES_FILTER = el.dataset.v;
+  renderPage('recipes');
+});
+registerAction('recipes:sort', (el) => {
+  RECIPES_SORT = el.dataset.v;
   renderPage('recipes');
 });
 registerAction('food:add', () => openManualForm());
