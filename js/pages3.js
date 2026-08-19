@@ -7,6 +7,7 @@ const BOARD = { view: 'month', month: null };
 
 registerPage('board', async function (root) {
   BOARD.month = BOARD.month || todayKey().slice(0, 7);
+  const totalCount = (await getRecords()).length;
   root.innerHTML = `
     <div class="page-head">
       <div>
@@ -17,12 +18,12 @@ registerPage('board', async function (root) {
     <div class="tabs" style="max-width:220px">
       ${[['month', '🗓️ 月视图'], ['week', '📅 周视图']].map(([k, t]) => `<div class="tab-item ${BOARD.view === k ? 'on' : ''}" data-action="board:view" data-v="${k}">${t}</div>`).join('')}
     </div>
-    ${BOARD.view === 'month' ? await renderMonth() : await renderWeek()}
+    ${BOARD.view === 'month' ? (totalCount ? await renderMonth() : renderBoardEmpty()) : await renderWeek()}
     <div id="board-charts">${await renderCharts()}</div>
     <div id="board-days">${await renderDayList()}</div>
   `;
   // 长按日历格子 → 标记放纵日
-  if (BOARD.view === 'month') {
+  if (BOARD.view === 'month' && totalCount) {
     setTimeout(() => {
       document.querySelectorAll('.cal-day[data-date]').forEach((el) => {
         bindLongPress(el, (e) => dayIndulgeHandler(e.dataset.date));
@@ -30,6 +31,15 @@ registerPage('board', async function (root) {
     }, 60);
   }
 });
+function renderBoardEmpty() {
+  return `
+    <div class="card" style="padding:38px 20px;text-align:center">
+      <div style="font-size:40px">🗓️</div>
+      <div class="es-title" style="font-size:16px;font-weight:700;margin:12px 0 6px">开始记录第一天，你的日历会在这里慢慢填满</div>
+      <div class="muted small">每一次记录，都会在日历上留下颜色</div>
+      <button class="btn primary" style="margin-top:16px" data-action="nav:go" data-page="record">📷 去记录</button>
+    </div>`;
+}
 
 async function renderMonth() {
   const [y, m] = BOARD.month.split('-').map(Number);
