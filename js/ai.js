@@ -53,12 +53,15 @@ function analyzeDay(stats, profile) {
   const target = profile.targetKcal || 1800;
   const mt = macroTargets(profile, target);
   const remaining = Math.max(0, target - stats.kcal);
+  // 膳食纤维无直接字段，用「蔬菜类食物」作为代理判断：今日是否吃过绿叶菜
+  const veggieOk = (stats.records || []).some((r) => /菜|沙拉|生菜|菠菜|西兰花|菌菇|香菇|金针菇|木耳|芹|黄瓜|番茄|芦笋|绿叶/.test(r.foodName));
   return {
     target,
     remaining,
     over: stats.kcal > target,
     stats,
     mt,
+    veggieOk,
     proteinNeed: Math.max(0, mt.protein - stats.protein),
     carbsNeed: Math.max(0, mt.carbs - stats.carbs),
     fatNeed: Math.max(0, mt.fat - stats.fat),
@@ -71,32 +74,50 @@ function analyzeDay(stats, profile) {
 }
 
 /* ---------- 营养秘书推荐逻辑 ---------- */
-function recommendNextMeal(meal, analysis, prefs, foodPool) {
+function recommendNextMeal(meal, analysis, prefs, foodPool, slot) {
   const tips = [];
   let strategy = '均衡';
   let note = '';
 
   if (meal === 'lunch') {
-    // 基于早餐（仅早餐数据时传入 stats 为早餐）
-    const breakfast = analysis;
-    if (breakfast.carbsOver) { strategy = '压主食补蛋白'; note = '早餐碳水偏高，午餐压主食、补蛋白质。'; }
-    else if (breakfast.proteinNeed > 0) { strategy = '蛋白拉满'; note = '早餐蛋白质不够，午餐蛋白质拉满。'; }
-    else if (breakfast.stats && breakfast.stats.kcal < analysis.target * 0.25) { strategy = '补偿性中高碳水'; note = '早餐吃太少，午餐补偿性中高碳水 + 蛋白质。'; }
-    else { strategy = '均衡'; note = '早餐状态不错，午餐保持均衡即可。'; }
+    // 午餐推荐基于早餐独立数据（传入的 analysis.stats 为早餐累计）
+    const b = (analysis.stats && analysis.stats) || {};
+    const carbs = b.carbs || 0, protein = b.protein || 0, kcal = b.kcal || 0;
+    if (carbs > 50) { strategy = '压主食补蛋白'; note = `早餐碳水已足量（吃了 ${carbs}g），午餐建议避开米饭/面条，主攻蛋白+蔬菜：去皮鸡腿沙拉，主食换成红薯或玉米。`; }
+    else if (protein < 20) { strategy = '蛋白拉满'; note = `早餐蛋白几乎为零（仅 ${protein}g），午餐急需补货：牛肉/虾仁为主菜，搭配一拳米饭。`; }
+    else if (kcal < 200) { strategy = '补偿性中高碳水'; note = `早上吃得太少了（仅 ${kcal}kcal），小心下午暴食。午餐务必吃够一碗杂粮饭+正常肉菜，稳住代谢。`; }
+    else { strategy = '均衡'; note = '早餐表现不错！午餐继续保持均衡：一拳主食+一掌心肉+两拳蔬菜。'; }
   } else if (meal === 'dinner') {
-    // 基于早+午餐累计
-    if (analysis.proteinNeed > 20) { strategy = '高蛋白低碳水'; note = `蛋白质还差 ${analysis.proteinNeed}g，晚餐高蛋白低碳水（纯肉/海鲜/豆腐）。`; }
-    else if (analysis.fatOver) { strategy = '极致清淡'; note = '今天脂肪偏多，晚餐清淡为主（水煮/清蒸/凉拌）。'; }
-    else if (analysis.remaining > 400) { strategy = '标准均衡餐'; note = `热量还有富余（剩 ${analysis.remaining}kcal），吃标准均衡餐。`; }
-    else if (analysis.stats && analysis.stats.carbs > analysis.mt.carbs * 0.6) { strategy = '高纤维蔬菜'; note = '纤维可能不足，让高纤维蔬菜占一半。'; }
+    // 晚餐推荐基于早+午餐累计数据
+    const need = analysis.proteinNeed || 0;
+    if ((analysis.proteinRate || 0) < 0.8) { strategy = '高蛋白低碳水'; note = `今天还差 ${need}g 蛋白质，晚餐不要碰主食了。强烈建议：清蒸鱼/白切鸡/凉拌豆腐，补足蛋白。`; }
+    else if (analysis.fatOver) { strategy = '极致清淡'; note = '今天油脂已经拉满，晚餐请给肠胃放个假：水煮西兰花+虾仁，或一碗菌菇汤。'; }
+    else if (analysis.remaining > (analysis.target || 1800) * 0.2) { strategy = '标准均衡餐'; note = `今天热量余量充足（还剩 ${analysis.remaining}kcal），晚餐可以吃得舒服点：一碗杂粮饭+炒肉+青菜。`; }
+    else if (!analysis.veggieOk) { strategy = '高纤维蔬菜'; note = '今天绿叶菜几乎没吃，晚餐必须加大份青菜！推荐：大份蒜蓉生菜/菠菜。'; }
     else { strategy = '均衡'; note = '平稳的一天，均衡搭配就好。'; }
   } else {
-    // 加餐（上午/下午/晚上）
-    strategy = '加餐'; note = '选择轻盈的加餐，不给正餐添负担。';
+    // 加餐（上午/下午/晚上），按触发条件给对应建议
+    const st = (analysis.stats && analysis.stats) || {};
+    const gap = analysis.proteinNeed || 0;
+    if (slot === 'snack0') {
+      strategy = '垫底加餐';
+      note = (st.kcal || 0) < 300 ? '早餐热量偏低，距离午餐还早，先垫个底（无糖酸奶/一个苹果），以免午餐刹不住车。' : '上午加餐选个轻盈的，别影响午餐胃口。';
+    } else if (slot === 'snack1') {
+      strategy = '提神加餐';
+      note = (st.carbs || 0) > 60 ? '午餐碳水偏多，下午代谢低谷期，吃点优质脂肪（一小把坚果/黑咖啡）提提神，顺便压制晚餐前的饥饿感。' : '下午加餐，选个低负担的提提神。';
+    } else {
+      strategy = '晚安加餐';
+      note = gap > 15 ? `蛋白质还差 ${gap}g，实在饿就吃这个吧（一杯热牛奶/几颗虾仁）：高蛋白低热量，不影响睡眠。` : '睡前加餐，高蛋白低热量最稳妥。';
+    }
   }
 
   // 优先从用户食谱库匹配
   let pool = foodPool && foodPool.length ? foodPool : FALLBACK_POOL[meal] || FALLBACK_POOL.default;
+  // 加餐按时段把对应推荐单品排到最前
+  if (meal === 'snack' && slot) {
+    const fav = slot === 'snack0' ? ['酸奶', '苹果'] : slot === 'snack1' ? ['坚果', '咖啡'] : ['牛奶', '虾'];
+    pool = pool.filter((x) => fav.some((k) => x.name.includes(k))).concat(pool.filter((x) => !fav.some((k) => x.name.includes(k))));
+  }
   if (prefs && prefs.flavor && prefs.flavor.length) {
     const f = prefs.flavor;
     pool = pool.filter((x) => {
@@ -112,7 +133,7 @@ function recommendNextMeal(meal, analysis, prefs, foodPool) {
     if (strategy === '压主食补蛋白' && (x.macros ? x.macros.protein < 15 : false)) continue;
     if (strategy === '高蛋白低碳水' && (x.macros ? x.macros.protein < 20 : false)) continue;
     if (strategy === '极致清淡' && (x.flavor && x.flavor.includes('辣'))) continue;
-    if (strategy === '加餐' && x.kcal > 250) continue;
+    if (meal === 'snack' && x.kcal > 250) continue;
     if (analysis.remaining > 0 && x.kcal > analysis.remaining + 150) continue;
     seen.add(x.name);
     out.push(Object.assign({}, x, { reason: buildReason(strategy, x, analysis, meal, note) }));
@@ -129,7 +150,9 @@ function buildReason(strategy, food, analysis, meal, baseNote) {
   if (strategy === '极致清淡') return `今天脂肪已超标，${n}清淡不添乱。`;
   if (strategy === '标准均衡餐') return `还剩 ${analysis.remaining}kcal 额度，${n}刚刚好。`;
   if (strategy === '高纤维蔬菜') return `纤维不足，${n}帮你补足膳食纤维。`;
-  if (strategy === '加餐') return `加餐吃${n}，克制又满足。`;
+  if (strategy === '垫底加餐') return `${n}，垫个底又不怕胖。`;
+  if (strategy === '提神加餐') return `${n}，优质脂肪提提神。`;
+  if (strategy === '晚安加餐') return `${n}，高蛋白低热量，安稳入睡。`;
   return `${n}，${baseNote}`;
 }
 
